@@ -6,6 +6,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, HfArgumentParser, pipeline
 import numpy as np
 import pandas as pd
+
 tqdm.pandas()
 
 
@@ -14,8 +15,9 @@ class ScriptArguments:
     """
     The arguments for the DPO training script.
     """
+
     data_set_name: Optional[str] = field(
-        default='allenai/reward-bench',
+        default="allenai/reward-bench",
         metadata={"help": "the location of the dataset name or path"},
     )
     record_dir: Optional[str] = field(
@@ -32,7 +34,7 @@ parser = HfArgumentParser(ScriptArguments)
 script_args = parser.parse_args_into_dataclasses()[0]
 
 ds_dir = script_args.data_set_name
-record_dir = script_args.record_dir 
+record_dir = script_args.record_dir
 
 
 rm_name = script_args.reward_name_or_path
@@ -45,7 +47,7 @@ rm_pipe = pipeline(
     device=device,
     tokenizer=rm_tokenizer,
     model_kwargs={"torch_dtype": torch.bfloat16},
-    truncation=True
+    truncation=True,
 )
 pipe_kwargs = {
     "return_all_scores": True,
@@ -54,20 +56,21 @@ pipe_kwargs = {
 }
 
 
+ds = load_dataset(ds_dir, split="filtered", keep_in_memory=True)
 
-ds = load_dataset(ds_dir, split='filtered', keep_in_memory=True)
-
-df = pd.DataFrame(columns=['id', 'subset', 'correct'])
-
+df = pd.DataFrame(columns=["id", "subset", "correct"])
 
 
 def change_of_format(prompt, resp):
     message = [
         {"role": "user", "content": prompt},
-        {"role": "assistant", "content": resp}
+        {"role": "assistant", "content": resp},
     ]
 
-    return rm_tokenizer.apply_chat_template(message, tokenize=False).replace(rm_tokenizer.bos_token, "")
+    return rm_tokenizer.apply_chat_template(message, tokenize=False).replace(
+        rm_tokenizer.bos_token, ""
+    )
+
 
 def get_reward(test_texts):
     pipe_outputs = rm_pipe(test_texts, **pipe_kwargs)
@@ -78,9 +81,12 @@ def get_reward(test_texts):
 for i, example in enumerate(tqdm(ds)):
 
     rewards = get_reward(
-                [change_of_format(example['prompt'], example['chosen']), change_of_format(example['prompt'], example['rejected'])]
-                )
-    
+        [
+            change_of_format(example["prompt"], example["chosen"]),
+            change_of_format(example["prompt"], example["rejected"]),
+        ]
+    )
+
     if rewards[0] == rewards[1]:
         correct = 0.5
     elif rewards[0] > rewards[1]:
@@ -88,27 +94,57 @@ for i, example in enumerate(tqdm(ds)):
     else:
         correct = 0
 
-    row = {'id': example['id'], 'subset': example['subset']}
-    row['correct'] = correct
+    row = {"id": example["id"], "subset": example["subset"]}
+    row["correct"] = correct
     df = df._append(row, ignore_index=True)
 
 categories = {
-    "chat": ["alpacaeval-easy", 'alpacaeval-length', 'alpacaeval-hard', 'mt-bench-easy', 'mt-bench-med'],
-    "chat-hard": ['mt-bench-hard', 'llmbar-natural', 'llmbar-adver-neighbor', 'llmbar-adver-GPTInst',
-                  'llmbar-adver-GPTOut', 'llmbar-adver-manual'],
-    "safety": ['refusals-dangerous', 'refusals-offensive', 'xstest-should-refuse', 'xstest-should-respond',
-               'donotanswer'],
-    "reasoning": ['math-prm', 'hep-cpp', 'hep-go', 'hep-java', 'hep-js', 'hep-python', 'hep-rust'],
+    "chat": [
+        "alpacaeval-easy",
+        "alpacaeval-length",
+        "alpacaeval-hard",
+        "mt-bench-easy",
+        "mt-bench-med",
+    ],
+    "chat-hard": [
+        "mt-bench-hard",
+        "llmbar-natural",
+        "llmbar-adver-neighbor",
+        "llmbar-adver-GPTInst",
+        "llmbar-adver-GPTOut",
+        "llmbar-adver-manual",
+    ],
+    "safety": [
+        "refusals-dangerous",
+        "refusals-offensive",
+        "xstest-should-refuse",
+        "xstest-should-respond",
+        "donotanswer",
+    ],
+    "reasoning": [
+        "math-prm",
+        "hep-cpp",
+        "hep-go",
+        "hep-java",
+        "hep-js",
+        "hep-python",
+        "hep-rust",
+    ],
 }
 
-df_acc = pd.DataFrame(columns=['category', 'subset', 'accuracy'])
+df_acc = pd.DataFrame(columns=["category", "subset", "accuracy"])
 for category, subsets in categories.items():
     for subset in subsets:
-        df_subset = df[df['subset'] == subset]
+        df_subset = df[df["subset"] == subset]
         accs = []
-        acc = df_subset['correct'].values.mean()
+        acc = df_subset["correct"].values.mean()
         accs.append(acc)
-        row = {'category': category, 'subset': subset, 'n': len(df_subset), 'accuracy': accs}
+        row = {
+            "category": category,
+            "subset": subset,
+            "n": len(df_subset),
+            "accuracy": accs,
+        }
         df_acc = pd.concat([df_acc, pd.DataFrame(row)], ignore_index=True)
 print(df_acc)
 
@@ -183,30 +219,36 @@ def calculate_scores_per_section(example_counts, subset_mapping, metrics):
                 total_weighted_score += metrics[test] * example_counts[test]
                 total_examples += example_counts[test]
         if total_examples > 0:
-            section_scores[section] = round(100 * total_weighted_score / total_examples, 2)
+            section_scores[section] = round(
+                100 * total_weighted_score / total_examples, 2
+            )
         else:
             section_scores[section] = 0
     return section_scores
 
 
-all_subsets = df['subset'].unique()
-df_final = pd.DataFrame(columns=['attribute', 'Chat', 'Chat Hard', 'Safety', 'Reasoning'])
+all_subsets = df["subset"].unique()
+df_final = pd.DataFrame(
+    columns=["attribute", "Chat", "Chat Hard", "Safety", "Reasoning"]
+)
 
-attribute = 'correct'
+attribute = "correct"
 metrics = {}
 for subset in all_subsets:
-    df_subset = df_acc.loc[df_acc['subset'] == subset]
-    acc = df_subset['accuracy'].values[0]
+    df_subset = df_acc.loc[df_acc["subset"] == subset]
+    acc = df_subset["accuracy"].values[0]
     metrics[subset] = acc
 
 # Calculate and print the scores per section
-scores_per_section = calculate_scores_per_section(EXAMPLE_COUNTS, SUBSET_MAPPING, metrics)
-row = {'attribute': attribute, **scores_per_section}
+scores_per_section = calculate_scores_per_section(
+    EXAMPLE_COUNTS, SUBSET_MAPPING, metrics
+)
+row = {"attribute": attribute, **scores_per_section}
 df_final = df_final._append(row, ignore_index=True)
-print('model:', script_args.reward_name_or_path)
-with open(record_dir, 'a') as f:
+print("model:", script_args.reward_name_or_path)
+with open(record_dir, "a") as f:
     f.write(script_args.reward_name_or_path + "\n")
-    for col in ['Chat', 'Chat Hard', 'Safety', 'Reasoning']:
+    for col in ["Chat", "Chat Hard", "Safety", "Reasoning"]:
         print(f"{col}: {df_final[col].values[0]}")
 
         f.write(col + "\t" + str(df_final[col].values[0]) + "\n")
